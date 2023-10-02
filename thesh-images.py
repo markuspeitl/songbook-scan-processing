@@ -10,14 +10,16 @@ from skimage import data
 from skimage import exposure
 from skimage.color import rgb2gray, convert_colorspace, rgb2hsv
 from skimage.util import img_as_uint
-from scipy.ndimage import shift
+from scipy.ndimage import shift, median_filter, gaussian_filter
+from skimage.filters import unsharp_mask, butterworth
+from skimage.morphology import disk
+from skimage.filters import rank
 
 from os import listdir
 from os.path import isfile, join
 import os
-import argparse
 
-save_processed_images_enabled = True
+"""save_processed_images_enabled = True
 save_pdf_enabled = False
 save_original_to_pdf_enabled = False
 process_images_enabled = True
@@ -25,13 +27,13 @@ compress_images_enabled = True
 rescale_images_enabled = True
 
 src_directory = './png'
-target_directory = './processed-pngs3'
+target_directory = './processed-pngs'
 
-out_pdf_path = './diamante_revised3.pdf'
+out_pdf_path = './diamante_revised.pdf'
 white_threshold = 180
-debug_offset = 50
-debug_limit = 10
-resize_factor = 0.3
+debug_offset = 60
+debug_limit = 5
+resize_factor = 1.0
 jpg_quality = 70
 
 
@@ -52,71 +54,62 @@ text_color = (0,0,0)
 annotation_color = (40,0,220)
 #text_color = (255,0,0)
 #annotation_color = (0,255,0)
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Template for building python console packages"
-    )
-
-    parser.add_argument('source_dir', help="print optional text")
-    parser.add_argument('target_dir', help="print optional text")
-    parser.add_argument('-pdf','--pdf_name', help="Multiply passed numbers")
-    parser.add_argument('-wt','--white_threshold', type=int, help="Multiply passed numbers", default=180)
-    parser.add_argument('-bbs','--binding_border_size', type=int, help="Multiply passed numbers", default=200)
-    parser.add_argument('-resize','--resize_factor', type=float, help="Multiply passed numbers", default=1.0)
-    parser.add_argument('-o','--images_offset', type=int, help="Multiply passed numbers")
-    parser.add_argument('-n','--images_amount', type=int, help="Multiply passed numbers")
-    
-    parser.add_argument('-c','--compress', action="store_true", help="Print module stuff")
-    parser.add_argument('-np','--disable_processing', action="store_true", help="Print module stuff")
-
-    parser.add_argument('-q','--jpg_quality', type=int, help="Multiply passed numbers")
-    parser.add_argument('-f','--output_format', type=int, help="Multiply passed numbers", choices=['png', 'jpg'])
-
+"""
 
 def adjust_contrast(image):
     p2, p98 = np.percentile(image, (1, 99))
-    #image = exposure.rescale_intensity(image, in_range=(p2, p98))
+    image = exposure.rescale_intensity(image, in_range=(p2, p98))
 
-def threshold_white(image, white_threshold_val):
+def threshold_white(image, white_threshold_val, target_white_intensity_value):
+    print("Threshold clearing white image regions")
     #pil_img = Image.fromarray(image)
     #pil_img = Image.fromarray(image)
     #img_gray_array = np.array(pil_img.convert('L'))
     img_gray_array = rgb2gray(image)
-    image[img_gray_array > (white_threshold_val/255)] = light_threshold_color_intensity
+    image[img_gray_array > (white_threshold_val/255)] = target_white_intensity_value
 
-def clear_margins(image, index):
+def clear_margins(image, options, index=-1):
+    print("Clearing image margins")
 
     #image = np.roll(image, (100,100), axis=(1,0))
-    
 
     if index % 2 != 0:
-        image[:,image.shape[1]-binding_border_size:,:] = border_color_intensity
-        image[:,0:non_binding_border_size,:] = border_color_intensity
+        image[:,image.shape[1]-options.binding_border_size:,:] = options.clear_color
+        image[:,0:options.non_binding_border_size,:] = options.clear_color
 
-        shifted = shift(image,[placement_adjustment_shift_y,placement_adjustment_shift_x,0], mode='constant', cval=255)
-        np.copyto(image, shifted)
+        if(options.shift):
+            #image = shift(image,[options.placement_adjustment_shift_y,options.placement_adjustment_shift_x,0], mode='constant', cval=255)
+            shifted = shift(image,[options.placement_adjustment_shift_y,options.placement_adjustment_shift_x,0], mode='constant', cval=255)
+            np.copyto(image, shifted)
         
     else:
-        image[:,image.shape[1]-non_binding_border_size:,:] = border_color_intensity
-        image[:,0:binding_border_size,:] = border_color_intensity
+        image[:,image.shape[1]-options.non_binding_border_size:,:] = options.clear_color
+        image[:,0:options.binding_border_size,:] = options.clear_color
 
-    image[0:vertical_border_size,:,:] = border_color_intensity
-    image[image.shape[0]-vertical_border_size:,:,:] = border_color_intensity
+    image[0:options.vertical_border_size,:,:] = options.clear_color
+    image[image.shape[0]-options.vertical_border_size:,:,:] = options.clear_color
 
-def detect_darken_blacks(image):
+def detect_recolor_image_layers(image, text_color=(0,0,0), annotation_color=(40,0,220), background_color=(255,255,255)):
+    print("Detect and darken/recolor text and annotation layers")
     #pil_img = Image.fromarray(image)
     #hsv_image = img_as_uint(rgb2hsv(image))
     hsv_image = rgb2hsv(image)
     #np.copyto(image, hsv_image)
-    image[hsv_image[:,:,2] < 0.5] = text_color
 
-    condition_indices = np.logical_and(np.logical_and(hsv_image[:,:,0] > (220/360), hsv_image[:,:,0] < (250/360)), hsv_image[:,:,1] > 0.3 )
+    print("Detecting text and setting new color")
 
+    black_text_condition= np.logical_and(hsv_image[:,:,1] < 0.6, hsv_image[:,:,2] < 0.55)
+
+    print("Detecting annotations and setting new color")
+    condition_indices = np.logical_and(np.logical_and(np.logical_and(hsv_image[:,:,0] > (210/360), hsv_image[:,:,0] < (250/360)), hsv_image[:,:,1] > 0.3 ), hsv_image[:,:,2] > 0.55)
+    black_text_condition = np.logical_and(np.logical_not(condition_indices), black_text_condition)
+
+    white_bg_condition = np.logical_and(hsv_image[:,:,1] < 0.3, hsv_image[:,:,2] > 0.74)
+
+    image[black_text_condition] = text_color
     image[condition_indices] = annotation_color
+    image[white_bg_condition] = (255,255,255)
 
-    #np.where(np.logical_and(a>=6, a<=10))
 
     """hsv_image = np.array(pil_img.convert('HSV'))
     hsv_image[hsv_image[:,:,1] < 100] = 0
@@ -124,141 +117,296 @@ def detect_darken_blacks(image):
     pil_img.convert('rgb')
     return pil_img"""
 
-def write_processed_image(image):
-    pil_img = Image.fromarray(image)
-    pil_img.save('./test.png')
+def filter_adjust_image(image):
 
-def process_image(img_color_array, index):
+    print("Filtering")
+    print("Median")
+    image = median_filter(image, size=4)
+
+    #image = butterworth(image, cutoff_frequency_ratio=0.02, order=3, high_pass=False)
+
+    print("Gaussian")
+    image = gaussian_filter(image, sigma=2)
+
+    print("Unsharp")
+    image = unsharp_mask(image, radius=6, amount=2)
+
+    #np.where(np.logical_and(a>=6, a<=10))
+
+
+def write_processed_image(np_image_array, path):
+    pil_img = Image.fromarray(np_image_array)
+    pil_img.save(path)
+
+def process_image(img_color_array, options, index=-1):
+    print("Running image adjustments and processing for " + str(index))
+
     adjust_contrast(img_color_array)
-    threshold_white(img_color_array, white_threshold)
-    clear_margins(img_color_array, index)
-    detect_darken_blacks(img_color_array)
+    clear_margins(img_color_array, options, index)
+    detect_recolor_image_layers(img_color_array, options.text_color, options.annotation_color, options.clear_color)
+    filter_adjust_image(img_color_array)
 
-def compress_image(image):
+def rescale_image(img, rescale_factor):
+    if(rescale_factor == 1.0):
+        return img
+        
+    return img.resize((int(img.size[0] * rescale_factor), int(img.size[1] * rescale_factor)), Image.BILINEAR)
+
+def compress_image(image, format='png', jpg_quality=80):
     #with BytesIO() as output_buffer:
     output_buffer = BytesIO()
     #pil_img = Image.fromarray(image)
-    image.save(output_buffer, format="JPEG",quality=jpg_quality, optimize=True)
+
+    if('jpg' in format.lower() or 'jpeg' in format.lower()):
+        format = "JPEG"
+        image.save(output_buffer, format, quality=jpg_quality, optimize=True)
+    else:
+        format = "PNG"
+        image.save(output_buffer, format)
 
     output_buffer.seek(0)
-    jpg_image = Image.open(output_buffer)
-    return jpg_image
-
-def save_pdf(path, image_list):
-    #with open(path, 'w+') as out_file:
-    #out_file.seek(0)
-    print("Saving " + str(len(image_list)) + " images to pdf " + path)
-    image_list[0].save(path, "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
+    compressed_pil_image = Image.open(output_buffer)
+    return compressed_pil_image
 
 
-def process_images_of_dir_pipeline(src_directory, target_directory):
-    if not os.path.exists(target_directory):
-        os.mkdir(target_directory)
 
-    png_file_list = listdir(src_directory)
-    png_file_list.sort()
+def read_process_compress_image(image_path, options, index=-1):
+    original_image = Image.open(image_path)
+    rescaled_image = rescale_image(original_image, options.rescale_factor)
+    #img_color_array = np.asarray(rescaled_image).copy()
+    img_color_array = np.asarray(rescaled_image)
 
+    if(not options.disable_processing):
+        process_image(img_color_array, options, index)
 
+    processed_pil_image = Image.fromarray(img_color_array)
+
+    if(options.compress):
+        processed_pil_image = compress_image(processed_pil_image, options.output_format, options.jpg_quality)
+
+    #out_img_path = os.path.join(out_dir, os.path.basename(image_path))
+    #compressed_image.save(out_img_path)
+
+    return rescaled_image, processed_pil_image
+
+import re
+image_file_regex = re.compile(".+\.(png|PNG|jpg|jpeg|JPG|JPEG|tiff|TIFF|gif|GIF|bmp|BMP)$")
+def is_image_file(image_file_name):
+    return bool(image_file_regex.match(image_file_name))
+
+def process_images_of_dir_pipeline(src_directory, options):
+    image_file_list = listdir(src_directory)
+
+    image_file_list = list(filter(lambda image_file_name: is_image_file(image_file_name), image_file_list))
+
+    image_file_list.sort()
+
+    rescaled_orig_image_list = []
     processed_image_list = []
+    for index, file in enumerate(image_file_list):
 
-    for index, file in enumerate(png_file_list):
-
-        if(index >= debug_offset and ((index - debug_offset) <= debug_limit or debug_limit == -1)):
+        if(index >= options.images_offset and ((index - options.images_offset) < options.images_amount or options.images_offset == -1)):
             print(file)
             print(index)
 
             img_path = os.path.join(src_directory, file)
 
-            img = Image.open(img_path)
+            rescaled_image, processed_image = read_process_compress_image(img_path, options, index)
 
-            if(rescale_images_enabled):
-                img = img.resize((int(img.size[0] * resize_factor), int(img.size[1] * resize_factor)), Image.BICUBIC)
-            img_color_array = np.asarray(img).copy()
-
-            if(process_images_enabled):
-                process_image(img_color_array, index)
-
-            pil_img = Image.fromarray(img_color_array)
+            rescaled_orig_image_list.append(rescaled_image)
             
-            if(compress_images_enabled):
-                compressed_image = compress_image(pil_img)
+            if(options.processed_dir != None and not options.save_images_after_finish_processing):
+                save_image_to_dir(processed_image, get_image_id(index,len(image_file_list)),options.processed_dir, options.output_format, options.output_image_name)
 
-            if save_processed_images_enabled:
-                out_img_path = os.path.join(target_directory, file)
-                compressed_image.save(out_img_path)
+            processed_image_list.append(processed_image)
 
-            if(save_original_to_pdf_enabled):
-                processed_image_list.append(img)
-
-            processed_image_list.append(compressed_image)
-
-    if save_pdf_enabled and len(processed_image_list) > 0:
-        save_pdf(out_pdf_path, processed_image_list)
+    return rescaled_orig_image_list, processed_image_list
 
 
-process_images_of_dir_pipeline(src_directory, target_directory)
+def save_image_to_dir(image, image_unique_id, target_directory, format='png', image_name="out"):
+    print("Saving image " + image_unique_id + " to directory: " + target_directory)
+    
+    if not os.path.exists(target_directory):
+        os.mkdir(target_directory)
 
-"""
-exit()
+    if(format.startswith('.')):
+        format = format[1:]
+
+    out_img_path = os.path.join(target_directory, image_name + '_' + image_unique_id + '.' + format)
+    image.save(out_img_path)
+    
+def get_image_id(index, images_total_length):
+    required_digits = len(str(images_total_length))
+    normalized_index_string = str(index).zfill(required_digits)
+    return normalized_index_string
+
+def save_images_to_dir(image_list, target_directory, format='png', image_name="out", name_offset=0):
+    print("Saving " + str(len(image_list)) + " to directory: " + target_directory)
+    
+    if(format.startswith('.')):
+        format = format[1:]
+
+    images_length = len(image_list)
+    if not os.path.exists(target_directory):
+        os.mkdir(target_directory)
+
+    for index, image in enumerate(image_list):
+
+        normalized_index_string = get_image_id(index + name_offset, images_length)
+        save_image_to_dir(image, normalized_index_string, target_directory, format,image_name)
+
+def save_images_to_pdf(image_list, pdf_path, options_suffix_string="", create_pdf_dir=False):
+    #with open(path, 'w+') as out_file:
+    #out_file.seek(0)
+
+    target_directory = os.path.dirname(pdf_path)
+
+    if(not os.path.exists(target_directory)):
+
+        if(create_pdf_dir):
+            os.mkdir(target_directory)
+        else:
+            raise Exception("Can not save pdf to" + pdf_path + " directory: " + target_directory + " does not exist")
+    
+    if(len(image_list) <= 0):
+        raise Exception("image_list needs to be non empty to save pdf")
+
+    pdf_path_parts = str(pdf_path).split('.')
+    extension = pdf_path_parts.pop()
+
+    if(len(options_suffix_string) > 0):
+        options_suffix_string += '--xim-' + str(len(image_list))
+
+    pdf_path = '.'.join(pdf_path_parts) + options_suffix_string + '.' + extension
+    
+    print("Saving " + str(len(image_list)) + " images to pdf " + pdf_path)
+    image_list[0].save(pdf_path, "PDF", save_all=True, append_images=image_list[1:])
+    #image_list[0].save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
+
+def path_string_from_options(options):
+    
+    selected_options = [
+        's-' + str(options.rescale_factor),
+        'sft-' + str(int(options.shift)),
+        'c-' + str(int(options.compress)),
+        'f-' + options.output_format
+    ]
+
+    if(not 'png' in options.output_format.lower()):
+        selected_options.append('q-' + str(options.jpg_quality))
+
+    return '--'.join(selected_options)
+
+class dotdict(dict):
+    """dot.notation access to dictionary attributes"""
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+def interleave_arrays(arrays):
+    interleaved_array = []
+
+    array_lengths = [ len(array) for array  in arrays ]
+
+    max_array_length = max(array_lengths)
+
+    for index in range(0, max_array_length):
+
+        for array in arrays:
+            if(index < len(array)):
+                interleaved_array.append(array[index])
+
+    return interleave_arrays
 
 
 
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Template for building python console packages"
+    )
 
-#img = misc.imread('./png/diamante_001.png')
+    parser.add_argument('source_dir', help="Source directory to read the images to process and convert from")
+    parser.add_argument('target', help="Where to store the result(s) to. Either a path to a .pdf file or a directory where to store the processed images to")
 
-img = Image.open('./png/diamante_016.png')
+    parser.add_argument('-pdir','--processed_dir', help="Path to the directory where to store the processed images to")
+    parser.add_argument('-pdf','--pdf_path', help="The path to the target pdf to be created")
+    
+    parser.add_argument('-mkdir','--create_pdf_dir', action="store_true", help="Create a new directory if the specified directory of the pdf_path does not exist", default=False)
+    parser.add_argument('-imgname','--output_image_name', help="How to label the processed images when they are written to target dir", default='out')
 
-img_gray_array = np.array(img.convert('L'))
-img_color_array = np.asarray(img).copy()
+    parser.add_argument('-sorg','--save_original', action="store_true", help="Save the original image to the target pdf for comparison", default=False)
+    parser.add_argument('-ap','--add_parameters', action="store_true", help="Add parameters to pdf name", default=False)
 
-thresh_mask = img_gray_array < 200
+    parser.add_argument('-wt','--white_threshold', type=int, help="Threshold pixel intensity (grayscale lightness) value at which a pixel is considered 'white'", default=180)
+    parser.add_argument('-bbs','--binding_border_size', type=int, help="Size of the border to be cleared for clearing the area of the binding from the scan", default=200)
+    parser.add_argument('-shift','--shift', action="store_true", help="Shift even scans to adjust difference", default=False)
 
-masked_color_image = img_color_array
+    parser.add_argument('-rs','--rescale_factor', type=float, help="Rescale the image before processing and saving", default=1.0)
+    
+    parser.add_argument('-o','--images_offset', type=int, help="Start from the image files at the offset position", default=-1)
+    parser.add_argument('-n','--images_amount', type=int, help="Amount of images to process", default=-1)
+    
+    parser.add_argument('-c','--compress', action="store_true", help="Compress the processed images before saving", default=False)
+    parser.add_argument('-f','--output_format', help="Image Output format", choices=['png', 'jpg'], default='png')
+    parser.add_argument('-q','--jpg_quality', type=int, help="Compressing quality if jpg format is selected .. extreme compression [0,100] no compression", default=80)
+    
+    parser.add_argument('-sv','--save_images_after_finish_processing', action="store_true", help="Save Images as soon as all of them are processed", default=False)
 
-#thresh_mask = np.bitwise_not(thresh_mask)
+    parser.add_argument('-dp','--disable_processing', action="store_true", help="Disable image processing", default=False)
 
-#masked_color_image = img_color_array * thresh_mask[:,:,None]
+    parser.add_argument('-tc','--text_color', type=int, nargs='+', help="Color to set detected text pixels in the image as", default=[0,0,0])
+    parser.add_argument('-ac','--annotation_color', type=int, nargs='+', help="Color to set detected text annotation pixels in the image as", default=[40,0,220])
+    parser.add_argument('-cc','--clear_color', type=int, nargs='+', help="Color to set cleared areas and thresholded background to", default=[255,255,255])
 
-masked_color_image = img_color_array
-
-#masked_color_image[:,:,0] = img_color_array[:,:,0] * thresh_mask
-#masked_color_image[:,:,1] = img_color_array[:,:,1] * thresh_mask
-#masked_color_image[:,:,2] = img_color_array[:,:,2] * thresh_mask
-
-
-#masked_color_image[masked_color_image <= 0] = 255
-
-
-min_intensity = np.min(img_gray_array)
-max_intensity = np.max(img_gray_array)
-p2, p98 = np.percentile(masked_color_image, (1, 99))
-masked_color_image = exposure.rescale_intensity(masked_color_image, in_range=(p2, p98))
-
-
-masked_color_image[img_gray_array > 180] = 255
-#masked_color_image[img_gray_array < 50] = 0
-
-
-masked_color_image[:,masked_color_image.shape[1]-200:,:] = 255
-masked_color_image[:,0:200,:] = 255
-
-masked_color_image[0:50,:,:] = 255
-masked_color_image[masked_color_image.shape[0]-50:,:,:] = 255
-
+    arguments = parser.parse_args()
 
 
+    options = {
+        'binding_border_size' : int(200 * arguments.rescale_factor),
+        'non_binding_border_size' : int(10 * arguments.rescale_factor),
+        'vertical_border_size' : int(50 * arguments.rescale_factor),
+        'placement_adjustment_shift_x' : int(25 * arguments.rescale_factor),
+        'placement_adjustment_shift_y' : int(5 * arguments.rescale_factor),
+        'text_color': tuple(arguments.text_color),
+        'annotation_color': tuple(arguments.annotation_color),
+        'clear_color': tuple(arguments.clear_color),
+    }
 
-#masked_color_image = exposure.equalize_hist(Image.fromarray(masked_color_image))
+    if(arguments.target.endswith('.pdf')):
+        print("Target is a pdf")
+        options['pdf_path'] = arguments.target
 
+    else:
+        if(not os.path.isdir(arguments.target)):
+           os.mkdir(arguments.target)
 
+        print("Target is a directory")
+        options['processed_dir'] = arguments.target
+        
+    options = {**arguments.__dict__, **options}
+    #options.update(arguments.__dict__)
+    options = dotdict(options)
 
+    #By default processing and pdf creation should be either done in tandem or as 2 step process (processing+saving, loading and creating pdf)
+    #Therefore processing should be disabled by default when only creating a pdf
+    if(options.processed_dir == None and options.pdf_path != None):
+        options.disable_processing=True
 
-print("shape is ", masked_color_image.shape)
-#print("dtype is ", img_array.dtype)
-#print("ndim is ", img_array.ndim)
+    rescaled_orig_image_list, processed_image_list = process_images_of_dir_pipeline(arguments.source_dir, options)
 
+    if(options.save_original):
+        processed_image_list = interleave_arrays([rescaled_orig_image_list, processed_image_list])
+    
+    #print(options)
+    if(options.processed_dir != None and options.save_images_after_finish_processing):
+        save_images_to_dir(processed_image_list, options.processed_dir, format=options.output_format, name_offset=(options.images_offset+1), image_name=options.output_image_name)
 
-pil_img = Image.fromarray(masked_color_image)
+    if(options.pdf_path != None):
+        options_suffix_string = ""
+        if(options.add_parameters):
+            options_suffix_string='_' + path_string_from_options(options)
 
-pil_img.save('./test.png')
-"""
+        save_images_to_pdf(processed_image_list, options.pdf_path, options_suffix_string, create_pdf_dir=options.create_pdf_dir)
+
+main()

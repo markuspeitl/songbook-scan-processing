@@ -3,3 +3,5 @@ processed-pngs*
 *.gs2p
 *.zip
 *.z01
+*.pdf
+processed*
