@@ -18,6 +18,8 @@ from skimage.filters import rank
 from os import listdir
 from os.path import isfile, join
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 """save_processed_images_enabled = True
 save_pdf_enabled = False
@@ -150,7 +152,7 @@ def rescale_image(img, rescale_factor):
     if(rescale_factor == 1.0):
         return img
         
-    return img.resize((int(img.size[0] * rescale_factor), int(img.size[1] * rescale_factor)), Image.BILINEAR)
+    return img.resize((int(img.size[0] * rescale_factor), int(img.size[1] * rescale_factor)), Image.BICUBIC)
 
 def compress_image(image, format='png', jpg_quality=80):
     #with BytesIO() as output_buffer:
@@ -194,33 +196,81 @@ image_file_regex = re.compile(".+\.(png|PNG|jpg|jpeg|JPG|JPEG|tiff|TIFF|gif|GIF|
 def is_image_file(image_file_name):
     return bool(image_file_regex.match(image_file_name))
 
-def process_images_of_dir_pipeline(src_directory, options):
-    image_file_list = listdir(src_directory)
+def in_processing_range(index, images_offset, images_amount):
+    #print('index: ' + str(index) + " -- offset " + str(images_offset) + " -- amount " + str(images_amount))
+
+    if(images_offset == -1 and images_amount == -1):
+        return True
+    
+    if(images_offset == -1):
+        images_offset = 0
+
+    if(images_amount == -1):
+        images_amount = index
+    
+    images_index_over_offset = (index - images_offset)
+    
+    if(index >= images_offset and images_index_over_offset < images_amount):
+        return True
+    
+    return False
+
+
+def read_process_and_write_image(img_path, options, index, images_total_length):
+    print("read_process_and_write_image: " + img_path)
+
+    rescaled_image, processed_image = read_process_compress_image(img_path, options, index)
+    
+    if(options.processed_dir != None and not options.save_images_after_finish_processing):
+        save_image_to_dir(processed_image, get_image_id(index,images_total_length),options.processed_dir, options.output_format, options.output_image_name)
+        processed_image.close()
+
+    if(options.processed_dir != None and options.save_original):
+        save_image_to_dir(rescaled_image, get_image_id(index,images_total_length) + "_original",options.processed_dir, options.output_format, options.output_image_name)
+        rescaled_image.close()
+
+def get_sorted_dir_image_paths(directory):
+    image_file_list = listdir(directory)
 
     image_file_list = list(filter(lambda image_file_name: is_image_file(image_file_name), image_file_list))
-
     image_file_list.sort()
 
-    rescaled_orig_image_list = []
-    processed_image_list = []
-    for index, file in enumerate(image_file_list):
+    image_paths_list = list(map(lambda image_file_name: os.path.join(directory, image_file_name), image_file_list))
+    return image_paths_list
 
-        if(index >= options.images_offset and ((index - options.images_offset) < options.images_amount or options.images_offset == -1)):
-            print(file)
-            print(index)
+def process_images_of_dir_pipeline(src_directory, options):
+    image_paths_list = get_sorted_dir_image_paths(src_directory)
+    images_total_length = len(image_paths_list)
 
-            img_path = os.path.join(src_directory, file)
+    #rescaled_orig_image_list = []
+    #processed_image_list = []
 
-            rescaled_image, processed_image = read_process_compress_image(img_path, options, index)
+    with ThreadPoolExecutor(max_workers=options.threads) as pool:
 
-            rescaled_orig_image_list.append(rescaled_image)
-            
-            if(options.processed_dir != None and not options.save_images_after_finish_processing):
-                save_image_to_dir(processed_image, get_image_id(index,len(image_file_list)),options.processed_dir, options.output_format, options.output_image_name)
+        for index, img_path in enumerate(image_paths_list):
 
-            processed_image_list.append(processed_image)
+            if(index < images_total_length and in_processing_range(index, options.images_offset, options.images_amount)):
+                print(img_path)
+                print(index)
 
-    return rescaled_orig_image_list, processed_image_list
+                #read_process_and_write_image(img_path, options, index, images_total_length)
+                future_worker = pool.submit(read_process_and_write_image, img_path, options, index, images_total_length)
+
+                """rescaled_image, processed_image = read_process_compress_image(img_path, options, index)
+
+                rescaled_orig_image_list.append(rescaled_image)
+                
+                if(options.processed_dir != None and not options.save_images_after_finish_processing):
+                    save_image_to_dir(processed_image, get_image_id(index,len(image_file_list)),options.processed_dir, options.output_format, options.output_image_name)
+                    processed_image.close()
+
+                if(options.processed_dir != None and options.save_original):
+                    save_image_to_dir(rescaled_image, get_image_id(index,len(image_file_list)) + "_original",options.processed_dir, options.output_format, options.output_image_name)
+                    rescaled_image.close()
+
+                #processed_image_list.append(processed_image)"""
+
+    #return rescaled_orig_image_list, processed_image_list
 
 
 def save_image_to_dir(image, image_unique_id, target_directory, format='png', image_name="out"):
@@ -280,8 +330,115 @@ def save_images_to_pdf(image_list, pdf_path, options_suffix_string="", create_pd
     pdf_path = '.'.join(pdf_path_parts) + options_suffix_string + '.' + extension
     
     print("Saving " + str(len(image_list)) + " images to pdf " + pdf_path)
-    image_list[0].save(pdf_path, "PDF", save_all=True, append_images=image_list[1:])
+    #image_list[0].save(pdf_path, "PDF", save_all=True, append_images=image_list[1:])
+    
+    print('Saving image ' + str(0) + " to pdf at: " + pdf_path)
+    image_list[0].save(pdf_path, "PDF")
+    
+
+    for index, image in enumerate(image_list[1:]):
+
+        print('Saving image ' + str(index+1) + " to pdf at: " + pdf_path)
+
+        image.save(pdf_path, "PDF", save_all=True, append=True)
+
+        image.close()
+
+    #image = Image.open('test')
+    #image.save()
+
     #image_list[0].save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
+
+def save_images_of_dir_to_pdf(src_directory, pdf_path, options):
+    image_paths_list = get_sorted_dir_image_paths(src_directory)
+
+    if(options.images_offset < 0):
+        options.images_offset = 0
+
+    if(options.images_amount > 0):
+        image_paths_list = image_paths_list[options.images_offset:options.images_amount]
+
+    images = []
+    for index, image_path in enumerate(image_paths_list):
+        image = rescale_image(Image.open(image_path), options.rescale_factor)
+        if(options.compress):
+            images.append(compress_image(image, options.output_format, options.jpg_quality))
+        else:
+            images.append(image)
+
+        print('Loaded image ' + str(index) + ": " + image_path)
+        
+    options_suffix_string = ""
+    if(options.add_parameters):
+        options_suffix_string='_' + path_string_from_options(options)
+
+    save_images_to_pdf(images, pdf_path, options_suffix_string, create_pdf_dir=options.create_pdf_dir)
+
+def save_images_to_pdf_options(src_directory, pdf_path, options):
+
+    options.add_parameters = True
+
+    pdf_option_sets = [
+        {
+            'rescale_factor': 1.0,
+            'output_format': 'png'
+        },
+        {
+            'rescale_factor': 0.8,
+            'output_format': 'png'
+        },
+        {
+            'rescale_factor': 0.6,
+            'output_format': 'png'
+        },
+        {
+            'rescale_factor': 0.5,
+            'output_format': 'png'
+        },
+        {
+            'rescale_factor': 0.4,
+            'output_format': 'png'
+        },
+        {
+            'rescale_factor': 0.3,
+            'output_format': 'png'
+        },
+        {
+            'rescale_factor': 1.0,
+            'output_format': 'jpg',
+            'jpg_quality': 70
+        },
+        {
+            'rescale_factor': 0.7,
+            'output_format': 'jpg',
+            'jpg_quality': 65
+        },
+        {
+            'rescale_factor': 0.5,
+            'output_format': 'jpg',
+            'jpg_quality': 65
+        },
+        {
+            'rescale_factor': 0.6,
+            'output_format': 'jpg',
+            'jpg_quality': 30
+        },
+    ]
+
+    import copy
+
+    with ThreadPoolExecutor(max_workers=options.threads) as pool:
+
+        for pdf_option_set in pdf_option_sets:
+            print(pdf_option_set)
+
+            new_options = dotdict(options)
+            for key in pdf_option_set:
+                new_options[key] = pdf_option_set[key]
+
+            #print(new_options)
+
+            future_worker = pool.submit(save_images_of_dir_to_pdf, src_directory, pdf_path, new_options)
 
 def path_string_from_options(options):
     
@@ -350,17 +507,18 @@ def main():
     parser.add_argument('-c','--compress', action="store_true", help="Compress the processed images before saving", default=False)
     parser.add_argument('-f','--output_format', help="Image Output format", choices=['png', 'jpg'], default='png')
     parser.add_argument('-q','--jpg_quality', type=int, help="Compressing quality if jpg format is selected .. extreme compression [0,100] no compression", default=80)
+    parser.add_argument('-t','--threads', type=int, help="Amount of worker threads for image processing", default=1)
     
     parser.add_argument('-sv','--save_images_after_finish_processing', action="store_true", help="Save Images as soon as all of them are processed", default=False)
 
     parser.add_argument('-dp','--disable_processing', action="store_true", help="Disable image processing", default=False)
+    parser.add_argument('-sm','--save_pdf_matrix', action="store_true", help="Save multiple pdfs with various compression options", default=False)
 
     parser.add_argument('-tc','--text_color', type=int, nargs='+', help="Color to set detected text pixels in the image as", default=[0,0,0])
     parser.add_argument('-ac','--annotation_color', type=int, nargs='+', help="Color to set detected text annotation pixels in the image as", default=[40,0,220])
     parser.add_argument('-cc','--clear_color', type=int, nargs='+', help="Color to set cleared areas and thresholded background to", default=[255,255,255])
 
     arguments = parser.parse_args()
-
 
     options = {
         'binding_border_size' : int(200 * arguments.rescale_factor),
@@ -393,20 +551,35 @@ def main():
     if(options.processed_dir == None and options.pdf_path != None):
         options.disable_processing=True
 
-    rescaled_orig_image_list, processed_image_list = process_images_of_dir_pipeline(arguments.source_dir, options)
 
-    if(options.save_original):
-        processed_image_list = interleave_arrays([rescaled_orig_image_list, processed_image_list])
+    if(options.processed_dir != None):
+        process_images_of_dir_pipeline(arguments.source_dir, options)
+
+    #if(options.save_original):
+    #    processed_image_list = interleave_arrays([rescaled_orig_image_list, processed_image_list])
     
     #print(options)
-    if(options.processed_dir != None and options.save_images_after_finish_processing):
-        save_images_to_dir(processed_image_list, options.processed_dir, format=options.output_format, name_offset=(options.images_offset+1), image_name=options.output_image_name)
+    #if(options.processed_dir != None and options.save_images_after_finish_processing):
+    #    save_images_to_dir(processed_image_list, options.processed_dir, format=options.output_format, name_offset=(options.images_offset+1), image_name=options.output_image_name)
 
     if(options.pdf_path != None):
+
+        source_path = None
+        if(options.processed_dir != None and len(options.processed_dir) > 0 and os.path.isdir(options.processed_dir)):
+            source_path = options.processed_dir
+        elif(options.source_dir != None and len(options.source_dir) > 0 and os.path.isdir(options.source_dir)):
+            source_path = options.source_dir
+
+        if(not options.save_pdf_matrix):
+            save_images_of_dir_to_pdf(source_path, options.pdf_path, options)
+        else:
+            save_images_to_pdf_options(options.source_dir, options.pdf_path, options)
+
+    """if(options.pdf_path != None):
         options_suffix_string = ""
         if(options.add_parameters):
             options_suffix_string='_' + path_string_from_options(options)
 
         save_images_to_pdf(processed_image_list, options.pdf_path, options_suffix_string, create_pdf_dir=options.create_pdf_dir)
-
+    """
 main()

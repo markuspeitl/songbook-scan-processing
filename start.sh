@@ -34,4 +34,7 @@ python3 thesh-images.py processed-pngs-2step-test output_pdfs/2-step-test.pdf --
 
 
 ### Diamante
-python3 thesh-images.py png processed-diamante-pngs --compress --shift
+python3 thesh-images.py png processed-diamante-pngs --compress --shift -t 10
+python3 thesh-images.py processed-diamante-pngs output_pdfs/diamante_revised_cleaned_full.pdf --compress --add_parameters --output_format 'png'
+
+python3 thesh-images.py processed-diamante-pngs output_pdfs/diamante_revised_cleaned_full.pdf --compress --add_parameters --output_format 'png' --save_pdf_matrix --threads 8
