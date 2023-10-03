@@ -20,6 +20,7 @@ from os.path import isfile, join
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+import concurrent
 
 """save_processed_images_enabled = True
 save_pdf_enabled = False
@@ -303,9 +304,9 @@ def save_images_to_dir(image_list, target_directory, format='png', image_name="o
     for index, image in enumerate(image_list):
 
         normalized_index_string = get_image_id(index + name_offset, images_length)
-        save_image_to_dir(image, normalized_index_string, target_directory, format,image_name)
+        save_image_to_dir(image, normalized_index_string, target_directory, format, image_name)
 
-def save_images_to_pdf(image_list, pdf_path, options_suffix_string="", create_pdf_dir=False):
+def save_images_to_pdf(image_list, pdf_path, options_suffix_string="", create_pdf_dir=False, batch_size=20):
     #with open(path, 'w+') as out_file:
     #out_file.seek(0)
 
@@ -334,20 +335,59 @@ def save_images_to_pdf(image_list, pdf_path, options_suffix_string="", create_pd
     
     print('Saving image ' + str(0) + " to pdf at: " + pdf_path)
     image_list[0].save(pdf_path, "PDF")
-    
 
-    for index, image in enumerate(image_list[1:]):
+    images_to_append_list = image_list[1:]
+    images_to_append_count = len(images_to_append_list)
+    nr_batches =  int(round(images_to_append_count/batch_size) + 1)
+
+    rounded_images_to_append_count = int(nr_batches * batch_size)
+
+    for index in range(0, rounded_images_to_append_count, batch_size):
+
+        batch_index= int(index/batch_size)
+        #print("Writing batch " + str(batch_index))
+
+        end_batch_index = index + batch_size
+        if(end_batch_index > images_to_append_count):
+            end_batch_index = images_to_append_count
+
+        images_batch = images_to_append_list[index:end_batch_index]
+
+        images_append_batch = []
+        if(len(images_batch) > 1):
+            images_append_batch = images_batch[1:]
+
+        if(len(images_batch) > 0):
+
+            print('Saving image batch ' + str(batch_index) + ": from " +  str(index) + " to " + str(end_batch_index) + " -- to pdf at: " + pdf_path)
+
+            images_batch[0].save(pdf_path, "PDF", save_all=True, append=True, append_images=images_append_batch)
+
+        for image in images_batch:
+            image.close()
+
+
+
+    """for index, image in enumerate(image_list[1:]):
 
         print('Saving image ' + str(index+1) + " to pdf at: " + pdf_path)
 
         image.save(pdf_path, "PDF", save_all=True, append=True)
 
         image.close()
-
+    """
     #image = Image.open('test')
     #image.save()
 
     #image_list[0].save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
+
+def load_rescale_compress(image_path, options, index=-1):
+    image = rescale_image(Image.open(image_path), options.rescale_factor)
+    if(options.compress):
+        image = compress_image(image, options.output_format, options.jpg_quality)
+
+    print('Loaded image ' + str(index) + ": " + image_path)
+    return image
 
 def save_images_of_dir_to_pdf(src_directory, pdf_path, options):
     image_paths_list = get_sorted_dir_image_paths(src_directory)
@@ -356,23 +396,34 @@ def save_images_of_dir_to_pdf(src_directory, pdf_path, options):
         options.images_offset = 0
 
     if(options.images_amount > 0):
-        image_paths_list = image_paths_list[options.images_offset:options.images_amount]
+        image_paths_list = image_paths_list[options.images_offset:options.images_offset + options.images_amount]
 
+    
     images = []
-    for index, image_path in enumerate(image_paths_list):
-        image = rescale_image(Image.open(image_path), options.rescale_factor)
-        if(options.compress):
-            images.append(compress_image(image, options.output_format, options.jpg_quality))
-        else:
-            images.append(image)
 
-        print('Loaded image ' + str(index) + ": " + image_path)
+    with ThreadPoolExecutor(max_workers=options.threads) as pool:
         
+        worker_futures = []
+        for index, image_path in enumerate(image_paths_list):
+            
+            #load_rescale_compress(image_path, images, options, index)
+            worker_future = pool.submit(load_rescale_compress, image_path, options, index)
+            worker_futures.append(worker_future)
+
+            #images.append(load_rescale_compress(image_path, options, index))
+
+            #print('Loaded image ' + str(index) + ": " + image_path)
+
+        #worker_futures, _ = concurrent.futures.wait(worker_futures)
+        for future in worker_futures:
+            worker_result = future.result()
+            images.append(worker_result)
+            
     options_suffix_string = ""
     if(options.add_parameters):
         options_suffix_string='_' + path_string_from_options(options)
 
-    save_images_to_pdf(images, pdf_path, options_suffix_string, create_pdf_dir=options.create_pdf_dir)
+    save_images_to_pdf(images, pdf_path, options_suffix_string, create_pdf_dir=options.create_pdf_dir, batch_size=options.batch_size)
 
 def save_images_to_pdf_options(src_directory, pdf_path, options):
 
@@ -508,6 +559,7 @@ def main():
     parser.add_argument('-f','--output_format', help="Image Output format", choices=['png', 'jpg'], default='png')
     parser.add_argument('-q','--jpg_quality', type=int, help="Compressing quality if jpg format is selected .. extreme compression [0,100] no compression", default=80)
     parser.add_argument('-t','--threads', type=int, help="Amount of worker threads for image processing", default=1)
+    parser.add_argument('-bn','--batch_size', type=int, help="Batch size for saving images to pdf file", default=20)
     
     parser.add_argument('-sv','--save_images_after_finish_processing', action="store_true", help="Save Images as soon as all of them are processed", default=False)
 
