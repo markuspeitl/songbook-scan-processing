@@ -16,48 +16,8 @@ from skimage.morphology import disk
 from skimage.filters import rank
 
 from os import listdir
-from os.path import isfile, join
 import os
-import threading
 from concurrent.futures import ThreadPoolExecutor
-import concurrent
-
-"""save_processed_images_enabled = True
-save_pdf_enabled = False
-save_original_to_pdf_enabled = False
-process_images_enabled = True
-compress_images_enabled = True
-rescale_images_enabled = True
-
-src_directory = './png'
-target_directory = './processed-pngs'
-
-out_pdf_path = './diamante_revised.pdf'
-white_threshold = 180
-debug_offset = 60
-debug_limit = 5
-resize_factor = 1.0
-jpg_quality = 70
-
-
-if(not rescale_images_enabled):
-    resize_factor = 1.0
-
-binding_border_size = int(200 * resize_factor)
-non_binding_border_size = int(10 * resize_factor)
-vertical_border_size = int(50 * resize_factor)
-placement_adjustment_shift_x = int(25 * resize_factor)
-placement_adjustment_shift_y = int(5 * resize_factor)
-
-
-border_color_intensity = 255
-light_threshold_color_intensity = 255
-
-text_color = (0,0,0)
-annotation_color = (40,0,220)
-#text_color = (255,0,0)
-#annotation_color = (0,255,0)
-"""
 
 def adjust_contrast(image):
     p2, p98 = np.percentile(image, (1, 99))
@@ -96,8 +56,8 @@ def detect_recolor_image_layers(image, text_color=(0,0,0), annotation_color=(40,
     print("Detect and darken/recolor text and annotation layers")
     #pil_img = Image.fromarray(image)
     #hsv_image = img_as_uint(rgb2hsv(image))
+
     hsv_image = rgb2hsv(image)
-    #np.copyto(image, hsv_image)
 
     print("Detecting text and setting new color")
 
@@ -134,9 +94,6 @@ def filter_adjust_image(image):
     print("Unsharp")
     image = unsharp_mask(image, radius=6, amount=2)
 
-    #np.where(np.logical_and(a>=6, a<=10))
-
-
 def write_processed_image(np_image_array, path):
     pil_img = Image.fromarray(np_image_array)
     pil_img.save(path)
@@ -156,9 +113,7 @@ def rescale_image(img, rescale_factor):
     return img.resize((int(img.size[0] * rescale_factor), int(img.size[1] * rescale_factor)), Image.BICUBIC)
 
 def compress_image(image, format='png', jpg_quality=80):
-    #with BytesIO() as output_buffer:
     output_buffer = BytesIO()
-    #pil_img = Image.fromarray(image)
 
     if('jpg' in format.lower() or 'jpeg' in format.lower()):
         format = "JPEG"
@@ -176,7 +131,6 @@ def compress_image(image, format='png', jpg_quality=80):
 def read_process_compress_image(image_path, options, index=-1):
     original_image = Image.open(image_path)
     rescaled_image = rescale_image(original_image, options.rescale_factor)
-    #img_color_array = np.asarray(rescaled_image).copy()
     img_color_array = np.asarray(rescaled_image)
 
     if(not options.disable_processing):
@@ -186,9 +140,6 @@ def read_process_compress_image(image_path, options, index=-1):
 
     if(options.compress):
         processed_pil_image = compress_image(processed_pil_image, options.output_format, options.jpg_quality)
-
-    #out_img_path = os.path.join(out_dir, os.path.basename(image_path))
-    #compressed_image.save(out_img_path)
 
     return rescaled_image, processed_pil_image
 
@@ -243,9 +194,6 @@ def process_images_of_dir_pipeline(src_directory, options):
     image_paths_list = get_sorted_dir_image_paths(src_directory)
     images_total_length = len(image_paths_list)
 
-    #rescaled_orig_image_list = []
-    #processed_image_list = []
-
     with ThreadPoolExecutor(max_workers=options.threads) as pool:
 
         for index, img_path in enumerate(image_paths_list):
@@ -254,24 +202,8 @@ def process_images_of_dir_pipeline(src_directory, options):
                 print(img_path)
                 print(index)
 
-                #read_process_and_write_image(img_path, options, index, images_total_length)
                 future_worker = pool.submit(read_process_and_write_image, img_path, options, index, images_total_length)
-
-                """rescaled_image, processed_image = read_process_compress_image(img_path, options, index)
-
-                rescaled_orig_image_list.append(rescaled_image)
-                
-                if(options.processed_dir != None and not options.save_images_after_finish_processing):
-                    save_image_to_dir(processed_image, get_image_id(index,len(image_file_list)),options.processed_dir, options.output_format, options.output_image_name)
-                    processed_image.close()
-
-                if(options.processed_dir != None and options.save_original):
-                    save_image_to_dir(rescaled_image, get_image_id(index,len(image_file_list)) + "_original",options.processed_dir, options.output_format, options.output_image_name)
-                    rescaled_image.close()
-
-                #processed_image_list.append(processed_image)"""
-
-    #return rescaled_orig_image_list, processed_image_list
+                #rescaled_image, processed_image = read_process_compress_image(img_path, options, index)
 
 
 def save_image_to_dir(image, image_unique_id, target_directory, format='png', image_name="out"):
@@ -307,9 +239,6 @@ def save_images_to_dir(image_list, target_directory, format='png', image_name="o
         save_image_to_dir(image, normalized_index_string, target_directory, format, image_name)
 
 def save_images_to_pdf(image_list, pdf_path, options_suffix_string="", create_pdf_dir=False, batch_size=20):
-    #with open(path, 'w+') as out_file:
-    #out_file.seek(0)
-
     target_directory = os.path.dirname(pdf_path)
 
     if(not os.path.exists(target_directory)):
@@ -366,21 +295,6 @@ def save_images_to_pdf(image_list, pdf_path, options_suffix_string="", create_pd
         for image in images_batch:
             image.close()
 
-
-
-    """for index, image in enumerate(image_list[1:]):
-
-        print('Saving image ' + str(index+1) + " to pdf at: " + pdf_path)
-
-        image.save(pdf_path, "PDF", save_all=True, append=True)
-
-        image.close()
-    """
-    #image = Image.open('test')
-    #image.save()
-
-    #image_list[0].save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
-
 def load_rescale_compress(image_path, options, index=-1):
     image = rescale_image(Image.open(image_path), options.rescale_factor)
     if(options.compress):
@@ -406,15 +320,12 @@ def save_images_of_dir_to_pdf(src_directory, pdf_path, options):
         worker_futures = []
         for index, image_path in enumerate(image_paths_list):
             
-            #load_rescale_compress(image_path, images, options, index)
             worker_future = pool.submit(load_rescale_compress, image_path, options, index)
             worker_futures.append(worker_future)
 
+            #load_rescale_compress(image_path, images, options, index)
             #images.append(load_rescale_compress(image_path, options, index))
 
-            #print('Loaded image ' + str(index) + ": " + image_path)
-
-        #worker_futures, _ = concurrent.futures.wait(worker_futures)
         for future in worker_futures:
             worker_result = future.result()
             images.append(worker_result)
@@ -476,8 +387,6 @@ def save_images_to_pdf_options(src_directory, pdf_path, options):
         },
     ]
 
-    import copy
-
     with ThreadPoolExecutor(max_workers=options.threads) as pool:
 
         for pdf_option_set in pdf_option_sets:
@@ -486,8 +395,6 @@ def save_images_to_pdf_options(src_directory, pdf_path, options):
             new_options = dotdict(options)
             for key in pdf_option_set:
                 new_options[key] = pdf_option_set[key]
-
-            #print(new_options)
 
             future_worker = pool.submit(save_images_of_dir_to_pdf, src_directory, pdf_path, new_options)
 
@@ -603,13 +510,9 @@ def main():
     if(options.processed_dir == None and options.pdf_path != None):
         options.disable_processing=True
 
-
     if(options.processed_dir != None):
         process_images_of_dir_pipeline(arguments.source_dir, options)
 
-    #if(options.save_original):
-    #    processed_image_list = interleave_arrays([rescaled_orig_image_list, processed_image_list])
-    
     #print(options)
     #if(options.processed_dir != None and options.save_images_after_finish_processing):
     #    save_images_to_dir(processed_image_list, options.processed_dir, format=options.output_format, name_offset=(options.images_offset+1), image_name=options.output_image_name)
@@ -626,12 +529,4 @@ def main():
             save_images_of_dir_to_pdf(source_path, options.pdf_path, options)
         else:
             save_images_to_pdf_options(options.source_dir, options.pdf_path, options)
-
-    """if(options.pdf_path != None):
-        options_suffix_string = ""
-        if(options.add_parameters):
-            options_suffix_string='_' + path_string_from_options(options)
-
-        save_images_to_pdf(processed_image_list, options.pdf_path, options_suffix_string, create_pdf_dir=options.create_pdf_dir)
-    """
 main()
