@@ -1,8 +1,13 @@
 #! /bin/bash
 
+
+# Might actually be faster with 'pypy3' which is a python interpreter with a JIT compiler and should quite a bit faster
+# If it effects in a speedup is questionable as the scan cleaning process mostly leverages "scipy, skimage, numpy and PIL" in long running and image operations
+# https://doc.pypy.org/en/latest/install.html
+# sudo apt install pypy3
+
+
 python3 thesh-images.py png/ processed-pngs/ -pdf output_pdfs/diamante_revised_cleaned.pdf
-
-
 
 
 python3 thesh-images.py png/ processed-pngs-x/
